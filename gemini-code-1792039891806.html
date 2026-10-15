@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>無音Webカメラ</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: #000;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .camera-view {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .controls {
+      height: 110px;
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      background: rgba(0, 0, 0, 0.9);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .shutter-btn {
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      border: 4px solid #fff;
+      background: transparent;
+      position: relative;
+      cursor: pointer;
+    }
+    .shutter-btn::after {
+      content: '';
+      position: absolute;
+      top: 3px; left: 3px; right: 3px; bottom: 3px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform 0.1s;
+    }
+    .shutter-btn:active::after {
+      transform: scale(0.85);
+    }
+    .action-btn {
+      background: rgba(255, 255, 255, 0.2);
+      border: none;
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: 20px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    canvas { display: none; }
+
+    /* 撮影後の確認画面 */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0, 0, 0, 0.95);
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+    }
+    .modal.active { display: flex; }
+    .modal img {
+      max-width: 90%;
+      max-height: 70vh;
+      border-radius: 12px;
+      object-fit: contain;
+    }
+    .modal-buttons {
+      margin-top: 24px;
+      display: flex;
+      gap: 16px;
+    }
+    .btn {
+      padding: 12px 28px;
+      border-radius: 24px;
+      border: none;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .btn-save { background-color: #007aff; color: #fff; }
+    .btn-cancel { background-color: #333; color: #fff; }
+  </style>
+</head>
+<body>
+
+  <div class="camera-view">
+    <video id="video" autoplay playsinline muted></video>
+  </div>
+
+  <div class="controls">
+    <button class="action-btn" id="switch-btn">切替</button>
+    <button class="shutter-btn" id="shutter-btn" aria-label="撮影"></button>
+    <div style="width: 50px;"></div>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
+  <!-- プレビューと保存画面 -->
+  <div class="modal" id="modal">
+    <img id="preview-img" alt="撮影写真">
+    <div class="modal-buttons">
+      <button class="btn btn-cancel" id="close-btn">再撮影</button>
+      <button class="btn btn-save" id="save-btn">写真に保存</button>
+    </div>
+  </div>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const shutterBtn = document.getElementById('shutter-btn');
+    const switchBtn = document.getElementById('switch-btn');
+    const modal = document.getElementById('modal');
+    const previewImg = document.getElementById('preview-img');
+    const saveBtn = document.getElementById('save-btn');
+    const closeBtn = document.getElementById('close-btn');
+
+    let currentStream = null;
+    let facingMode = 'environment'; // 'environment' = 背面カメラ, 'user' = インカメラ
+    let capturedBlob = null;
+
+    // カメラの開始
+    async function startCamera() {
+      if (currentStream) {
+        currentStream.getTracks().forEach(track => track.stop());
+      }
+      try {
+        const constraints = {
+          video: {
+            facingMode: facingMode,
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          },
+          audio: false
+        };
+        currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = currentStream;
+      } catch (err) {
+        alert('カメラへのアクセス許可が必要です: ' + err.message);
+      }
+    }
+
+    // シャッター処理（無音キャプチャ）
+    shutterBtn.addEventListener('click', () => {
+      if (!video.videoWidth) return;
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+
+      // インカメラの場合は左右反転処理
+      if (facingMode === 'user') {
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+      }
+
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // 完全オンデバイス処理でBlob化
+      canvas.toBlob((blob) => {
+        capturedBlob = blob;
+        previewImg.src = URL.createObjectURL(blob);
+        modal.classList.add('active');
+      }, 'image/jpeg', 0.95);
+    });
+
+    // iPhoneの写真アプリへ保存する処理
+    saveBtn.addEventListener('click', async () => {
+      if (!capturedBlob) return;
+
+      const file = new File([capturedBlob], `photo_${Date.now()}.jpg`, { type: 'image/jpeg' });
+
+      // iOS SafariのWeb Share APIを起動し「画像を保存」へ繋ぐ
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file] });
+          modal.classList.remove('active');
+        } catch (err) {
+          if (err.name !== 'AbortError') {
+            alert('保存時にエラーが発生しました: ' + err.message);
+          }
+        }
+      } else {
+        alert('プレビュー画像を長押しして「写真に追加」を選択してください。');
+      }
+    });
+
+    closeBtn.addEventListener('click', () => {
+      modal.classList.remove('active');
+    });
+
+    switchBtn.addEventListener('click', () => {
+      facingMode = (facingMode === 'environment') ? 'user' : 'environment';
+      startCamera();
+    });
+
+    startCamera();
+  </script>
+</body>
+</html>
